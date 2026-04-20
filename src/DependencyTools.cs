@@ -180,24 +180,18 @@ public static class DependencyTools
 
             foreach (dynamic dep in task.TaskDependencies)
             {
-                var entry = new
+                if ((int)dep.To.UniqueID == uniqueId)
                 {
-                    uniqueId = (int)dep.From.UniqueID,
-                    name = (string)dep.From.Name,
-                    type = FormatDependencyType((int)dep.Type),
-                    lag = (string)dep.Lag.ToString(),
-                };
-
-                if ((int)dep.From.UniqueID != uniqueId)
-                    predecessors.Add(entry);
-                else
-                    successors.Add(new
-                    {
-                        uniqueId = (int)dep.To.UniqueID,
-                        name = (string)dep.To.Name,
-                        type = FormatDependencyType((int)dep.Type),
-                        lag = (string)dep.Lag.ToString(),
-                    });
+                    // this task is the successor — dep.From is the predecessor
+                    predecessors.Add(new { uniqueId = (int)dep.From.UniqueID, name = (string)dep.From.Name,
+                        type = FormatDependencyType((int)dep.Type), lag = (string)dep.Lag.ToString() });
+                }
+                else if ((int)dep.From.UniqueID == uniqueId)
+                {
+                    // this task is the predecessor — dep.To is the successor
+                    successors.Add(new { uniqueId = (int)dep.To.UniqueID, name = (string)dep.To.Name,
+                        type = FormatDependencyType((int)dep.Type), lag = (string)dep.Lag.ToString() });
+                }
             }
 
             return JsonSerializer.Serialize(new

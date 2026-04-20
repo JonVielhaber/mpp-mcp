@@ -105,6 +105,7 @@ public sealed class SessionManager
                     try
                     {
                         dynamic proj = session.Project;
+                        proj.Activate();
                         proj.Application.FileCloseEx(0); // pjDoNotSave
                     }
                     catch { /* best effort */ }
@@ -118,7 +119,7 @@ public sealed class SessionManager
     public class ProjectSession
     {
         public string SessionId { get; }
-        public string FilePath { get; }
+        public string FilePath { get; set; }
         public object Project { get; }
         public DateTime LastAccessed { get; set; }
         public int ActiveOps;

@@ -59,6 +59,8 @@ public static class FileTools
         await sessions.ComThread.InvokeAsync(() =>
         {
             dynamic proj = session.Project;
+            // Activate this project before closing to ensure we close the right one
+            proj.Activate();
             proj.Application.FileCloseEx(save ? 1 : 0); // 1=pjSave, 0=pjDoNotSave
         });
 
@@ -91,6 +93,7 @@ public static class FileTools
             proj.Application.FileSaveAs(fullPath);
         });
 
+        session.FilePath = fullPath;
         return JsonSerializer.Serialize(new { saved = true, path = fullPath });
     }
 
