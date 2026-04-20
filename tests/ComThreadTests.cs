@@ -55,4 +55,19 @@ public class ComThreadTests : IDisposable
         var results = await Task.WhenAll(tasks);
         Assert.Equal(Enumerable.Range(0, 10).Select(i => i * 2), results);
     }
+
+    [Fact]
+    public async Task InvokeAsync_AfterDispose_ReturnsFaultedTask()
+    {
+        _thread.Dispose();
+        var task = _thread.InvokeAsync(() => 42);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => task);
+    }
+
+    [Fact]
+    public void Dispose_CalledTwice_DoesNotThrow()
+    {
+        _thread.Dispose();
+        _thread.Dispose(); // should not throw
+    }
 }

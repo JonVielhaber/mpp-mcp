@@ -6,6 +6,7 @@ public sealed class ComThread : IDisposable
 {
     private readonly Thread _thread;
     private readonly BlockingCollection<Action> _queue = new();
+    private int _disposed;
 
     public ComThread()
     {
@@ -29,42 +30,38 @@ public sealed class ComThread : IDisposable
     public Task<T> InvokeAsync<T>(Func<T> func)
     {
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _queue.Add(() =>
+        try
         {
-            try
+            _queue.Add(() =>
             {
-                tcs.SetResult(func());
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-        });
+                try
+                {
+                    tcs.SetResult(func());
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            tcs.SetException(new ObjectDisposedException(nameof(ComThread)));
+        }
         return tcs.Task;
     }
 
-    public Task InvokeAsync(Action action)
-    {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        _queue.Add(() =>
-        {
-            try
-            {
-                action();
-                tcs.SetResult();
-            }
-            catch (Exception ex)
-            {
-                tcs.SetException(ex);
-            }
-        });
-        return tcs.Task;
-    }
+    public Task InvokeAsync(Action action) =>
+        InvokeAsync<object?>(() => { action(); return null; });
 
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            return;
+
         _queue.CompleteAdding();
-        _thread.Join(TimeSpan.FromSeconds(5));
+        if (!_thread.Join(TimeSpan.FromSeconds(5)))
+            Console.Error.WriteLine("ComThread: worker thread did not exit within timeout.");
         _queue.Dispose();
     }
 }
