@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using ModelContextProtocol.Server;
 
@@ -54,19 +55,151 @@ public static class FileTools
 
     private static async Task<string> CloseAsync(SessionManager sessions, string sessionId, bool save)
     {
-        var session = sessions.GetSession(sessionId);
+        var phase = "get_session";
+        bool? activationRequired = null;
+        string? activeProjectFullNameBeforeClose = null;
+        string? targetSessionFullName = null;
+        bool? activeProjectAlreadyMatchedTarget = null;
+        var fallbackActivationAttempted = false;
+        var projectActivateCompleted = false;
+        var fileCloseExInvoked = false;
+        bool? fileCloseExReturnValue = null;
+        var sessionRemovalCompleted = false;
+        var applicationShutdownCompleted = false;
 
-        await sessions.ComThread.InvokeAsync(() =>
+        try
         {
-            dynamic proj = session.Project;
-            // Activate this project before closing to ensure we close the right one
-            proj.Activate();
-            proj.Application.FileCloseEx(save ? 1 : 0); // 1=pjSave, 0=pjDoNotSave
-        });
+            var session = sessions.GetSession(sessionId);
+            targetSessionFullName = NormalizeProjectPath(session.FilePath);
 
-        sessions.RemoveSession(sessionId);
-        await sessions.QuitAppIfNoSessionsAsync();
-        return JsonSerializer.Serialize(new { closed = true, saved = save });
+            phase = "project_inspect_active";
+            await sessions.ComThread.InvokeAsync(() =>
+            {
+                dynamic trackedProject = session.Project;
+                dynamic application = trackedProject.Application;
+                object? activeProject = application.ActiveProject;
+                activeProjectFullNameBeforeClose = GetProjectFullName(activeProject);
+                activeProjectAlreadyMatchedTarget = ProjectPathsMatch(
+                    activeProjectFullNameBeforeClose,
+                    targetSessionFullName);
+                activationRequired = !activeProjectAlreadyMatchedTarget.Value;
+
+                if (activationRequired.Value)
+                {
+                    fallbackActivationAttempted = true;
+                    phase = "project_find";
+                    var targetProject = FindProjectByFullName(application, targetSessionFullName)
+                        ?? throw new InvalidOperationException(
+                            "The tracked project could not be found in the Microsoft Project application. " +
+                            "FileCloseEx was not invoked to avoid closing the wrong project.");
+
+                    phase = "project_activate";
+                    dynamic projectToActivate = targetProject;
+                    projectToActivate.Activate();
+
+                    phase = "project_verify_active";
+                    object? activeProjectAfterActivation = application.ActiveProject;
+                    var activeProjectFullNameAfterActivation =
+                        GetProjectFullName(activeProjectAfterActivation);
+                    if (!ProjectPathsMatch(activeProjectFullNameAfterActivation, targetSessionFullName))
+                    {
+                        throw new InvalidOperationException(
+                            "Microsoft Project did not activate the tracked project. " +
+                            "FileCloseEx was not invoked to avoid closing the wrong project.");
+                    }
+                }
+
+                projectActivateCompleted = true;
+
+                phase = "file_close_ex";
+                fileCloseExInvoked = true;
+                fileCloseExReturnValue = (bool)application.FileCloseEx(save ? 1 : 0); // 1=pjSave, 0=pjDoNotSave
+            });
+
+            phase = "session_removal";
+            sessions.RemoveSession(sessionId);
+            sessionRemovalCompleted = true;
+
+            phase = "application_shutdown";
+            applicationShutdownCompleted = await sessions.QuitAppIfNoSessionsAsync(reportFailure: true);
+
+            return JsonSerializer.Serialize(new
+            {
+                closed = true,
+                saved = save,
+                activationRequired,
+                activeProjectFullNameBeforeClose,
+                targetSessionFullName,
+                activeProjectAlreadyMatchedTarget,
+                fallbackActivationAttempted,
+                projectActivateCompleted,
+                fileCloseExReturnValue,
+            });
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                closed = false,
+                saved = save,
+                failedPhase = phase,
+                exceptionType = ex.GetType().FullName,
+                exceptionMessage = ex.Message,
+                comHResult = GetComHResult(ex),
+                activationRequired,
+                activeProjectFullNameBeforeClose,
+                targetSessionFullName,
+                activeProjectAlreadyMatchedTarget,
+                fallbackActivationAttempted,
+                projectActivateCompleted,
+                fileCloseExInvoked,
+                fileCloseExReturnValue,
+                sessionRemovalCompleted,
+                applicationShutdownCompleted,
+            });
+        }
+    }
+
+    private static object? FindProjectByFullName(dynamic application, string targetFullName)
+    {
+        dynamic projects = application.Projects;
+        var projectCount = (int)projects.Count;
+        for (var index = 1; index <= projectCount; index++)
+        {
+            object? candidate = projects.Item(index);
+            if (candidate != null && ProjectPathsMatch(GetProjectFullName(candidate), targetFullName))
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private static string? GetProjectFullName(object? project)
+    {
+        if (project == null)
+            return null;
+
+        dynamic projectProxy = project;
+        string? fullName = projectProxy.FullName;
+        return string.IsNullOrWhiteSpace(fullName) ? null : NormalizeProjectPath(fullName);
+    }
+
+    private static bool ProjectPathsMatch(string? projectFullName, string targetFullName) =>
+        projectFullName != null &&
+        string.Equals(projectFullName, targetFullName, StringComparison.OrdinalIgnoreCase);
+
+    private static string NormalizeProjectPath(string path) =>
+        Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    private static string? GetComHResult(Exception exception)
+    {
+        for (Exception? current = exception; current != null; current = current.InnerException)
+        {
+            if (current is COMException comException)
+                return $"0x{unchecked((uint)comException.HResult):X8}";
+        }
+
+        return null;
     }
 
     private static async Task<string> SaveAsync(SessionManager sessions, string sessionId)

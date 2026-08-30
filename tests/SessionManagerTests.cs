@@ -87,4 +87,25 @@ public class SessionManagerTests : IDisposable
         mgr.RemoveSession(id1);
         Assert.Equal(1, mgr.SessionCount);
     }
+
+    [Fact]
+    public async Task QuitAppIfNoSessions_UsesExplicitDoNotSave()
+    {
+        var mgr = new SessionManager(_comThread, TimeSpan.FromMinutes(5));
+        var fakeApp = new FakeProjectApplication();
+        typeof(SessionManager)
+            .GetField("_app", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(mgr, fakeApp);
+
+        await mgr.QuitAppIfNoSessionsAsync();
+
+        Assert.Equal(0, fakeApp.SaveChanges);
+    }
+
+    public sealed class FakeProjectApplication
+    {
+        public int? SaveChanges { get; private set; }
+
+        public void Quit(int saveChanges) => SaveChanges = saveChanges;
+    }
 }

@@ -80,15 +80,27 @@ public sealed class SessionManager
             Interlocked.Decrement(ref session.ActiveOps);
     }
 
-    public async Task QuitAppIfNoSessionsAsync()
+    public async Task<bool> QuitAppIfNoSessionsAsync(bool reportFailure = false)
     {
-        if (_sessions.IsEmpty && _app != null)
+        if (!_sessions.IsEmpty || _app == null)
+            return false;
+
+        try
         {
             await _comThread.InvokeAsync(() =>
             {
-                try { _app!.Quit(); } catch { /* already closed */ }
+                _app!.Quit(0); // pjDoNotSave
             });
             _app = null;
+            return true;
+        }
+        catch
+        {
+            _app = null;
+            if (reportFailure)
+                throw;
+
+            return false;
         }
     }
 
